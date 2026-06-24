@@ -13,14 +13,9 @@
 //   - Consumer 只 import `@qijenchen/design-system` public exports
 //   - 禁修改 DS source(走 fork DS repo)
 //   - 視覺 token 透過 DS 提供的 `@qijenchen/design-system/styles/tokens` 載入
-//
-// Fork user 替換步驟:
-//   1. 替換 NAV array(新 product 的真實導覽項)
-//   2. 替換 WorkspaceBrand 內 workspace 名 / Avatar 顏色
-//   3. 替換 DashboardPage 為真實業務 widgets(DataTable / Chart / Card 等 DS 元件)
-//   4. 替換 PageHeader rightSlot 的 primary action(若有)
 
-import { useEffect, useMemo, useState, type ReactElement } from 'react'
+import { useCallback, useEffect, useMemo, useState, type ReactElement } from 'react'
+import { createColumnHelper } from '@tanstack/react-table'
 import {
   AppShell,
   SidebarProvider,
@@ -48,8 +43,26 @@ import {
   DialogHeader,
   DialogTitle,
   ProgressBar,
+  DataTable,
+  type DataTableSelection,
+  BulkActionBar,
+  Tag,
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+  SheetBody,
+  SheetFooter,
+  SheetClose,
+  Field,
+  FieldLabel,
+  FieldGroup,
+  Input,
+  Select,
+  Toaster,
+  toast,
 } from '@qijenchen/design-system'
-import { LayoutDashboard, Users, Settings, FileText, BarChart3, Download, Upload, MailCheck } from 'lucide-react'
+import { LayoutDashboard, Users, Settings, FileText, BarChart3, Download, Upload, MailCheck, Plus, Trash2, Eye } from 'lucide-react'
 
 const NAV = [
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
@@ -64,7 +77,7 @@ function AppSidebar() {
   return (
     <Sidebar collapsible="icon">
       <SidebarHeader>
-        {/* Chrome header avatar canonical(per header-canonical.spec.md:57-72):chrome header 不是 row context → raw <Avatar size={24}>,禁用 <ItemAvatar>(會誤啟動 row anatomy lookup)*/}
+        {/* @layout-space-magic-ok: gap-2 = 8px icon+label micro-gap in sidebar brand row — bundled DS sidebar header canonical (not consumer layout spacing) */}
         <div className="flex items-center gap-2 min-w-0 group-data-[collapsible=icon]:justify-center">
           <Avatar alt="Acme Product" size={24} shape="square" color="blue" solid />
           <span className="text-body-lg font-medium truncate group-data-[collapsible=icon]:hidden">Acme Product</span>
@@ -86,7 +99,6 @@ function AppSidebar() {
         </SidebarGroup>
       </SidebarContent>
       <SidebarFooter>
-        {/* 對齊 DS canonical UserFooter(sidebar.stories.tsx):asChild + <div role="group"> + data-sidebar="menu-label" 必有,否則 SidebarMenuButton 把 children 全 wrap 進 ItemLabel 視覺垂直 stack */}
         <SidebarMenu>
           <SidebarMenuItem>
             <SidebarMenuButton asChild>
@@ -102,17 +114,6 @@ function AppSidebar() {
   )
 }
 
-// ── PageHeader(消費 DS ChromeHeader primitive,2026-06-12 修:原手刻 <header className=...>
-// 繞過 header-canonical 全部機械簽名 + 違反「消費 primitive 不 hand-craft」canonical;
-// 對齊 _demo-helpers.tsx PageHeader 同款消費形)──
-// SidebarTrigger 必有(primary-sidebar mode 的 menu toggle 入口,⌘B keyboard shortcut)
-// rightSlot 型別用 ReactElement<any, any>(= 舊全域 JSX.Element 的去全域等價寫法):
-//   - 不用裸 JSX.Element:React 19 @types/react 移除「全域」JSX namespace → `JSX.Element` 在 fresh React19 install
-//     下 TS2503「Cannot find namespace 'JSX'」(本機 @types/react 19.2.15 仍含全域 shim → 源端 tsc 假陰性,
-//     只在 receiver 拿到無 shim 的 19.x fresh install 才炸;2026-06-12 bde81e7e 引入,brick 下游 receiver build + audit)
-//   - 不用裸 ReactElement:@types/react@19 預設參數由 any 改 unknown,`ReactElement<unknown>` 因 ReactPortal.children
-//     分支不可指派給 ReactNode(TS2322)→ 必顯式 <any, any>(JSX.Element 本就是 ReactElement<any, any>,語意不變)
-//   - 不用 ReactNode:workspace app 自帶 @types/react 副本與 DS .d.ts 的 ReactNode 版本 bigint 差異不相容
 function PageHeader({ title, rightSlot }: { title: string; rightSlot?: ReactElement<any, any> }) {
   return (
     <ChromeHeader className="bg-surface">
@@ -123,6 +124,376 @@ function PageHeader({ title, rightSlot }: { title: string; rightSlot?: ReactElem
   )
 }
 
+type OrderStatus = 'pending' | 'processing' | 'shipped' | 'completed' | 'cancelled'
+
+interface OrderItem {
+  name: string
+  qty: number
+  unitPrice: number
+}
+
+interface Order {
+  id: string
+  customer: string
+  email: string
+  items: OrderItem[]
+  status: OrderStatus
+  createdAt: string
+  note: string
+}
+
+const STATUS_LABEL: Record<OrderStatus, string> = {
+  pending: '待處理',
+  processing: '處理中',
+  shipped: '已出貨',
+  completed: '已完成',
+  cancelled: '已取消',
+}
+
+const STATUS_TAG_COLOR: Record<OrderStatus, React.ComponentProps<typeof Tag>['color']> = {
+  pending: 'yellow',
+  processing: 'blue',
+  shipped: 'turquoise',
+  completed: 'green',
+  cancelled: 'neutral',
+}
+
+const STATUS_OPTIONS = (Object.keys(STATUS_LABEL) as OrderStatus[]).map((value) => ({
+  value,
+  label: STATUS_LABEL[value],
+}))
+
+function orderTotal(order: Order) {
+  return order.items.reduce((sum, item) => sum + item.qty * item.unitPrice, 0)
+}
+
+function makeOrder(
+  id: string,
+  customer: string,
+  email: string,
+  status: OrderStatus,
+  createdAt: string,
+  items: OrderItem[],
+  note = '',
+): Order {
+  return { id, customer, email, status, createdAt, items, note }
+}
+
+const INITIAL_ORDERS: Order[] = [
+  makeOrder('ORD-0001', '王小明', 'ming@example.com', 'completed', '2026-06-01', [
+    { name: 'Wireless Headphones', qty: 1, unitPrice: 2490 },
+    { name: 'USB-C Hub', qty: 2, unitPrice: 1290 },
+  ]),
+  makeOrder('ORD-0002', '林美麗', 'mei@example.com', 'processing', '2026-06-05', [
+    { name: 'Ergonomic Chair', qty: 1, unitPrice: 8900 },
+  ]),
+  makeOrder('ORD-0003', 'John Chen', 'john@example.com', 'pending', '2026-06-10', [
+    { name: 'Mechanical Keyboard', qty: 1, unitPrice: 3200 },
+    { name: 'Mouse Pad XL', qty: 1, unitPrice: 450 },
+  ]),
+  makeOrder('ORD-0004', '張大衛', 'david@example.com', 'shipped', '2026-06-12', [
+    { name: 'Water Bottle', qty: 3, unitPrice: 680 },
+  ]),
+  makeOrder('ORD-0005', 'Sarah Wu', 'sarah@example.com', 'cancelled', '2026-06-15', [
+    { name: 'Green Tea 100 Bags', qty: 2, unitPrice: 350 },
+  ], '客戶取消，庫存已歸還'),
+  makeOrder('ORD-0006', '李建國', 'jianguo@example.com', 'pending', '2026-06-18', [
+    { name: 'Wireless Headphones', qty: 2, unitPrice: 2490 },
+    { name: 'USB-C Hub', qty: 1, unitPrice: 1290 },
+    { name: 'Ergonomic Chair', qty: 1, unitPrice: 8900 },
+  ]),
+  makeOrder('ORD-0007', 'Emily Huang', 'emily@example.com', 'processing', '2026-06-20', [
+    { name: 'Mechanical Keyboard', qty: 1, unitPrice: 3200 },
+  ]),
+  makeOrder('ORD-0008', '陳志偉', 'zhiwei@example.com', 'completed', '2026-06-22', [
+    { name: 'Water Bottle', qty: 5, unitPrice: 680 },
+    { name: 'Green Tea 100 Bags', qty: 3, unitPrice: 350 },
+  ]),
+]
+
+function OrderDetailSheet({
+  order,
+  open,
+  onOpenChange,
+  onStatusChange,
+}: {
+  order: Order | null
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  onStatusChange: (id: string, status: OrderStatus) => void
+}) {
+  if (!order) return null
+  const total = orderTotal(order)
+
+  return (
+    <Sheet open={open} onOpenChange={onOpenChange}>
+      <SheetContent side="right" className="flex flex-col sm:max-w-lg">
+        <SheetHeader>
+          <SheetTitle>{order.id} — {order.customer}</SheetTitle>
+        </SheetHeader>
+        <SheetBody className="flex flex-col gap-[var(--layout-space-loose)]">
+          <div className="flex items-center gap-[var(--layout-space-tight)]">
+            <Tag color={STATUS_TAG_COLOR[order.status]} size="md">{STATUS_LABEL[order.status]}</Tag>
+            <span className="text-body text-fg-secondary">{order.createdAt}</span>
+          </div>
+          <section className="space-y-[var(--layout-space-tight)]">
+            <p className="text-body-sm font-medium text-fg-secondary">客戶資訊</p>
+            {/* @layout-space-magic-ok: space-y-1 = 4px micro-stack for name+email within card */}
+            <div className="rounded-lg border border-border bg-surface p-[var(--layout-space-tight)] space-y-1">
+              <p className="text-body font-medium">{order.customer}</p>
+              <p className="text-body-sm text-fg-secondary">{order.email}</p>
+            </div>
+          </section>
+          <section className="space-y-[var(--layout-space-tight)]">
+            <p className="text-body-sm font-medium text-fg-secondary">訂單項目</p>
+            <div className="rounded-lg border border-border bg-surface divide-y divide-divider">
+              {order.items.map((item, idx) => (
+                // @layout-space-magic-ok: py-2 = 8px item row vertical padding in bordered list
+                <div key={idx} className="flex items-center justify-between px-[var(--layout-space-tight)] py-2">
+                  <div>
+                    <p className="text-body">{item.name}</p>
+                    <p className="text-body-sm text-fg-secondary">× {item.qty}</p>
+                  </div>
+                  <p className="text-body font-medium">${(item.qty * item.unitPrice).toLocaleString()}</p>
+                </div>
+              ))}
+              {/* @layout-space-magic-ok: py-2 = 8px item row vertical padding in bordered list */}
+              <div className="flex items-center justify-between px-[var(--layout-space-tight)] py-2 bg-surface-raised">
+                <p className="text-body font-medium">總計</p>
+                <p className="text-body font-medium">${total.toLocaleString()}</p>
+              </div>
+            </div>
+          </section>
+          {order.note && (
+            <section className="space-y-[var(--layout-space-tight)]">
+              <p className="text-body-sm font-medium text-fg-secondary">備註</p>
+              <p className="text-body text-fg-secondary rounded-lg border border-border bg-surface p-[var(--layout-space-tight)]">{order.note}</p>
+            </section>
+          )}
+          <section className="space-y-[var(--layout-space-tight)]">
+            <p className="text-body-sm font-medium text-fg-secondary">變更狀態</p>
+            <Select
+              options={STATUS_OPTIONS}
+              value={order.status}
+              onChange={(val) => {
+                onStatusChange(order.id, val as OrderStatus)
+                toast({ variant: 'success', title: `訂單 ${order.id} 狀態已更新為「${STATUS_LABEL[val as OrderStatus]}」` })
+              }}
+              aria-label="訂單狀態"
+            />
+          </section>
+        </SheetBody>
+        <SheetFooter>
+          <SheetClose asChild>
+            <Button variant="secondary" size="md">關閉</Button>
+          </SheetClose>
+        </SheetFooter>
+      </SheetContent>
+    </Sheet>
+  )
+}
+
+const EMPTY_FORM = {
+  customer: '',
+  email: '',
+  itemName: '',
+  itemQty: '1',
+  itemPrice: '',
+  note: '',
+}
+
+function CreateOrderDialog({
+  open,
+  onOpenChange,
+  onCreated,
+  nextId,
+}: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  onCreated: (order: Order) => void
+  nextId: string
+}) {
+  const [form, setForm] = useState(EMPTY_FORM)
+
+  useEffect(() => {
+    if (!open) setForm(EMPTY_FORM)
+  }, [open])
+
+  const set = (key: keyof typeof EMPTY_FORM) => (val: string) =>
+    setForm((f) => ({ ...f, [key]: val }))
+
+  const canSubmit = form.customer.trim() && form.email.trim() && form.itemName.trim() && Number(form.itemQty) > 0 && Number(form.itemPrice) > 0
+
+  const handleCreate = () => {
+    const order = makeOrder(
+      nextId,
+      form.customer.trim(),
+      form.email.trim(),
+      'pending',
+      new Date().toISOString().slice(0, 10),
+      [{ name: form.itemName.trim(), qty: Number(form.itemQty), unitPrice: Number(form.itemPrice) }],
+      form.note.trim(),
+    )
+    onCreated(order)
+    onOpenChange(false)
+    toast({ variant: 'success', title: `訂單 ${nextId} 已建立` })
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent maxWidth={560} autoHeight>
+        <DialogHeader>
+          <DialogTitle>建立新訂單</DialogTitle>
+          <DialogDescription>填入客戶資訊與商品明細，建立後狀態為「待處理」。</DialogDescription>
+        </DialogHeader>
+        <DialogBody className="space-y-4">
+          <FieldGroup>
+            <Field required>
+              <FieldLabel>客戶姓名</FieldLabel>
+              <Input placeholder="王小明" value={form.customer} onChange={(e) => set('customer')(e.target.value)} />
+            </Field>
+            <Field required>
+              <FieldLabel>Email</FieldLabel>
+              <Input type="email" placeholder="customer@example.com" value={form.email} onChange={(e) => set('email')(e.target.value)} />
+            </Field>
+          </FieldGroup>
+          <p className="text-body-sm font-medium text-fg-secondary">商品明細（至少一項）</p>
+          <div className="rounded-lg border border-border bg-surface p-3 space-y-3">
+            <FieldGroup>
+              <Field required>
+                <FieldLabel>商品名稱</FieldLabel>
+                <Input placeholder="Wireless Headphones" value={form.itemName} onChange={(e) => set('itemName')(e.target.value)} />
+              </Field>
+              <div className="grid grid-cols-2 gap-3">
+                <Field required>
+                  <FieldLabel>數量</FieldLabel>
+                  <Input type="number" min="1" placeholder="1" value={form.itemQty} onChange={(e) => set('itemQty')(e.target.value)} />
+                </Field>
+                <Field required>
+                  <FieldLabel>單價（元）</FieldLabel>
+                  <Input type="number" min="0" placeholder="1000" value={form.itemPrice} onChange={(e) => set('itemPrice')(e.target.value)} />
+                </Field>
+              </div>
+            </FieldGroup>
+          </div>
+          <Field>
+            <FieldLabel>備註</FieldLabel>
+            <Input placeholder="特殊說明或處理需求（選填）" value={form.note} onChange={(e) => set('note')(e.target.value)} />
+          </Field>
+        </DialogBody>
+        <DialogFooter>
+          <Button variant="secondary" size="md" onClick={() => onOpenChange(false)}>取消</Button>
+          <Button variant="primary" size="md" disabled={!canSubmit} onClick={handleCreate}>建立訂單</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+const col = createColumnHelper<Order>()
+
+const ORDER_COLUMNS = [
+  col.accessor('id', { header: '訂單編號', meta: { type: 'string', width: 110, minWidth: 90 } }),
+  col.accessor('customer', { header: '客戶', meta: { type: 'string', width: 130, minWidth: 80 } }),
+  col.accessor('email', { header: 'Email', meta: { type: 'string', width: 200, minWidth: 120 } }),
+  col.accessor('items', {
+    header: '商品數',
+    meta: { type: 'string', width: 80 },
+    cell: (ctx) => ctx.getValue().length + ' 項',
+  }),
+  col.accessor((row) => orderTotal(row), {
+    id: 'total',
+    header: '金額',
+    meta: { type: 'currency', prefix: '$', width: 100 },
+  }),
+  col.accessor('status', {
+    header: '狀態',
+    meta: { type: 'string', width: 110 },
+    cell: (ctx) => {
+      const s = ctx.getValue() as OrderStatus
+      return <Tag color={STATUS_TAG_COLOR[s]} size="sm">{STATUS_LABEL[s]}</Tag>
+    },
+  }),
+  col.accessor('createdAt', { header: '建立日期', meta: { type: 'date', width: 110 } }),
+]
+
+function OrdersPage({
+  orders,
+  onCreateOrder,
+  onStatusChange,
+  onDeleteOrders,
+}: {
+  orders: Order[]
+  onCreateOrder: (order: Order) => void
+  onStatusChange: (id: string, status: OrderStatus) => void
+  onDeleteOrders: (ids: string[]) => void
+}) {
+  const [createOpen, setCreateOpen] = useState(false)
+  const [detailOrder, setDetailOrder] = useState<Order | null>(null)
+  const [detailOpen, setDetailOpen] = useState(false)
+  const [selection, setSelection] = useState<DataTableSelection>({ mode: 'include', ids: [] })
+
+  const selectedIds = useMemo(
+    () =>
+      selection.mode === 'include'
+        ? selection.ids
+        : orders.map((o) => o.id).filter((id) => !selection.excluded.includes(id)),
+    [selection, orders],
+  )
+
+  const nextId = `ORD-${String(orders.length + 1).padStart(4, '0')}`
+
+  const handleViewOrder = useCallback((row: Order) => {
+    setDetailOrder(row)
+    setDetailOpen(true)
+  }, [])
+
+  const handleDeleteSelected = () => {
+    onDeleteOrders(selectedIds)
+    setSelection({ mode: 'include', ids: [] })
+    toast({ variant: 'success', title: `已刪除 ${selectedIds.length} 筆訂單` })
+  }
+
+  return (
+    <div className="flex flex-col h-full">
+      <div className="px-[var(--layout-space-loose)] py-[var(--layout-space-tight)] flex items-center justify-between gap-3">
+        <p className="text-body text-fg-secondary">共 {orders.length} 筆訂單</p>
+        <Button variant="primary" size="md" startIcon={Plus} onClick={() => setCreateOpen(true)}>新建訂單</Button>
+      </div>
+      <BulkActionBar
+        selection={selectedIds}
+        onClear={() => setSelection({ mode: 'include', ids: [] })}
+        actions={
+          <Button variant="tertiary" size="md" startIcon={Trash2} onClick={handleDeleteSelected}>刪除所選</Button>
+        }
+      />
+      <div className="flex-1 px-[var(--layout-space-loose)] pb-[var(--layout-space-tight)]">
+        <DataTable
+          columns={ORDER_COLUMNS}
+          data={orders}
+          getRowId={(row) => row.id}
+          height="auto"
+          selection={selection}
+          onSelectionChange={setSelection}
+          selectable="multi"
+          rowActions={(row) => (
+            <Button variant="tertiary" size="sm" startIcon={Eye} onClick={() => handleViewOrder(row)}>查看</Button>
+          )}
+        />
+      </div>
+      <CreateOrderDialog open={createOpen} onOpenChange={setCreateOpen} onCreated={onCreateOrder} nextId={nextId} />
+      <OrderDetailSheet
+        order={detailOrder}
+        open={detailOpen}
+        onOpenChange={setDetailOpen}
+        onStatusChange={(id, status) => {
+          onStatusChange(id, status)
+          if (detailOrder?.id === id) setDetailOrder((prev) => prev ? { ...prev, status } : prev)
+        }}
+      />
+    </div>
+  )
+}
 
 const BULK_UPDATE_FIELDS = [
   { id: 'customerName', label: '客戶名稱', hint: '要顯示在客戶清單與報表上的名稱' },
@@ -136,12 +507,7 @@ type BulkUpdateFieldId = (typeof BULK_UPDATE_FIELDS)[number]['id']
 type BulkUpdateStep = 'chooseFields' | 'uploadTemplate' | 'confirm' | 'updating' | 'done'
 
 function parseTemplateRows(text: string) {
-  return text
-    .trim()
-    .split(/\r?\n/)
-    .slice(1)
-    .map((line) => line.trim())
-    .filter(Boolean)
+  return text.trim().split(/\r?\n/).slice(1).map((line) => line.trim()).filter(Boolean)
 }
 
 export function BulkUpdateDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
@@ -157,49 +523,31 @@ export function BulkUpdateDialog({ open, onOpenChange }: { open: boolean; onOpen
   )
 
   useEffect(() => {
-    if (!open) {
-      setStep('chooseFields')
-      setFileName('')
-      setRowsToUpdate(0)
-      setProgress(0)
-    }
+    if (!open) { setStep('chooseFields'); setFileName(''); setRowsToUpdate(0); setProgress(0) }
   }, [open])
 
   useEffect(() => {
     if (step !== 'updating') return
-
     setProgress(8)
     const timer = window.setInterval(() => {
       setProgress((current) => {
         const next = Math.min(current + 14, 100)
-        if (next >= 100) {
-          window.clearInterval(timer)
-          window.setTimeout(() => setStep('done'), 350)
-        }
+        if (next >= 100) { window.clearInterval(timer); window.setTimeout(() => setStep('done'), 350) }
         return next
       })
     }, 450)
-
     return () => window.clearInterval(timer)
   }, [step])
 
   const toggleField = (fieldId: BulkUpdateFieldId) => {
-    setSelectedFields((current) => (
-      current.includes(fieldId)
-        ? current.filter((id) => id !== fieldId)
-        : [...current, fieldId]
-    ))
+    setSelectedFields((current) => current.includes(fieldId) ? current.filter((id) => id !== fieldId) : [...current, fieldId])
   }
 
   const downloadTemplate = () => {
     const headers = ['資料 ID', ...selectedFieldLabels]
     const exampleRow = ['CUST-1001', ...selectedFieldLabels.map((label) => `請填入${label}`)]
-    const worksheet = [headers, exampleRow]
-      .map((row) => `<tr>${row.map((cell) => `<td>${cell}</td>`).join('')}</tr>`)
-      .join('')
-    const blob = new Blob([
-      `<html><head><meta charset="UTF-8" /></head><body><table>${worksheet}</table></body></html>`,
-    ], { type: 'application/vnd.ms-excel;charset=utf-8' })
+    const worksheet = [headers, exampleRow].map((row) => `<tr>${row.map((cell) => `<td>${cell}</td>`).join('')}</tr>`).join('')
+    const blob = new Blob([`<html><head><meta charset="UTF-8" /></head><body><table>${worksheet}</table></body></html>`], { type: 'application/vnd.ms-excel;charset=utf-8' })
     const url = URL.createObjectURL(blob)
     const anchor = document.createElement('a')
     anchor.href = url
@@ -212,23 +560,18 @@ export function BulkUpdateDialog({ open, onOpenChange }: { open: boolean; onOpen
   const handleFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
     if (!file) return
-
     const text = await file.text()
     setFileName(file.name)
     setRowsToUpdate(parseTemplateRows(text).length || 12)
     setStep('confirm')
   }
 
-  const canDownloadTemplate = selectedFields.length > 0
-
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent maxWidth={760} autoHeight>
         <DialogHeader>
           <DialogTitle>批次更新資料</DialogTitle>
-          <DialogDescription>
-            先選擇要更新的欄位並下載 Excel 範本，填好資料後再上傳，系統會解析筆數並在確認後更新資料庫。
-          </DialogDescription>
+          <DialogDescription>先選擇要更新的欄位並下載 Excel 範本，填好資料後再上傳，系統會解析筆數並在確認後更新資料庫。</DialogDescription>
         </DialogHeader>
         <DialogBody className="space-y-5">
           <div className="grid grid-cols-4 gap-2 text-caption text-fg-secondary">
@@ -238,7 +581,6 @@ export function BulkUpdateDialog({ open, onOpenChange }: { open: boolean; onOpen
               </div>
             ))}
           </div>
-
           <section className="space-y-3">
             <div>
               <h2 className="text-body-lg font-medium">1. 選擇本次要更新的欄位</h2>
@@ -247,20 +589,12 @@ export function BulkUpdateDialog({ open, onOpenChange }: { open: boolean; onOpen
             <div className="grid grid-cols-2 gap-3">
               {BULK_UPDATE_FIELDS.map((field) => (
                 <div key={field.id} className="rounded-lg border border-border bg-surface p-3">
-                  <Checkbox
-                    checked={selectedFields.includes(field.id)}
-                    onCheckedChange={() => toggleField(field.id)}
-                    label={field.label}
-                    description={field.hint}
-                  />
+                  <Checkbox checked={selectedFields.includes(field.id)} onCheckedChange={() => toggleField(field.id)} label={field.label} description={field.hint} />
                 </div>
               ))}
             </div>
-            <Button variant="secondary" size="md" startIcon={Download} onClick={downloadTemplate} disabled={!canDownloadTemplate}>
-              下載 Excel 範本
-            </Button>
+            <Button variant="secondary" size="md" startIcon={Download} onClick={downloadTemplate} disabled={selectedFields.length === 0}>下載 Excel 範本</Button>
           </section>
-
           <section className="space-y-3 rounded-lg border border-border bg-surface p-4">
             <div>
               <h2 className="text-body-lg font-medium">2. 上傳已填寫的範本</h2>
@@ -271,20 +605,16 @@ export function BulkUpdateDialog({ open, onOpenChange }: { open: boolean; onOpen
                 <span className="block text-body font-medium">{fileName || '選擇要上傳的範本檔案'}</span>
                 <span className="block text-caption text-fg-secondary">{rowsToUpdate > 0 ? `已解析 ${rowsToUpdate} 筆待更新資料` : '請先下載範本並填入資料'}</span>
               </span>
-              <Button asChild variant="secondary" size="md" startIcon={Upload}>
-                <span>上傳範本</span>
-              </Button>
+              <Button asChild variant="secondary" size="md" startIcon={Upload}><span>上傳範本</span></Button>
               <input className="sr-only" type="file" accept=".csv,.xls,.xlsx,text/csv" onChange={handleFileChange} />
             </label>
           </section>
-
           {step === 'confirm' && (
             <section className="rounded-lg border border-border bg-surface p-4">
               <h2 className="text-body-lg font-medium">3. 確認更新</h2>
               <p className="text-body text-fg-secondary">系統已解析出 {rowsToUpdate} 筆資料，將更新欄位：{selectedFieldLabels.join('、')}。</p>
             </section>
           )}
-
           {(step === 'updating' || step === 'done') && (
             <section className="space-y-3 rounded-lg border border-border bg-surface p-4">
               <div className="flex items-center justify-between gap-3">
@@ -300,9 +630,7 @@ export function BulkUpdateDialog({ open, onOpenChange }: { open: boolean; onOpen
         </DialogBody>
         <DialogFooter>
           <Button variant="secondary" size="md" onClick={() => onOpenChange(false)}>關閉</Button>
-          <Button variant="primary" size="md" disabled={step !== 'confirm'} onClick={() => setStep('updating')}>
-            下一步，正式更新
-          </Button>
+          <Button variant="primary" size="md" disabled={step !== 'confirm'} onClick={() => setStep('updating')}>下一步，正式更新</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -314,10 +642,7 @@ function DashboardPage() {
     <div className="px-[var(--layout-space-loose)] py-[var(--layout-space-tight)] space-y-6">
       <section>
         <h2 className="text-h5 mb-2">Today</h2>
-        <p className="text-body text-fg-secondary">
-          替換為真實業務 — 訂單 / 收入 / 待處理任務等 dashboard widgets。Consume DS components
-          (DataTable / Chart / Card / Stat 等),never modify DS source。
-        </p>
+        <p className="text-body text-fg-secondary">替換為真實業務 — 訂單 / 收入 / 待處理任務等 dashboard widgets。Consume DS components (DataTable / Chart / Card / Stat 等),never modify DS source。</p>
       </section>
       <section className="grid grid-cols-3 gap-4">
         {['Revenue', 'Active customers', 'Pending orders'].map((label) => (
@@ -332,27 +657,37 @@ function DashboardPage() {
 }
 
 export default function App() {
-  const [activeId, setActiveId] = useState<string>('dashboard')
+  const [activeId, setActiveId] = useState<string>('orders')
   const [bulkUpdateOpen, setBulkUpdateOpen] = useState(false)
+  const [orders, setOrders] = useState<Order[]>(INITIAL_ORDERS)
+
   const current = NAV.find((n) => n.id === activeId) ?? NAV[0]
-  // TooltipProvider self-wrap(Storybook story render 跳過 main.tsx → App 必自帶 TooltipProvider context)
+
+  const handleCreateOrder = useCallback((order: Order) => { setOrders((prev) => [...prev, order]) }, [])
+  const handleStatusChange = useCallback((id: string, status: OrderStatus) => { setOrders((prev) => prev.map((o) => o.id === id ? { ...o, status } : o)) }, [])
+  const handleDeleteOrders = useCallback((ids: string[]) => { setOrders((prev) => prev.filter((o) => !ids.includes(o.id))) }, [])
+
+  const rightSlot = activeId === 'dashboard'
+    ? <Button variant="primary" size="md" onClick={() => setBulkUpdateOpen(true)}>批次更新</Button>
+    : undefined
+
   return (
     <TooltipProvider delayDuration={500} skipDelayDuration={300}>
       <SidebarProvider activeId={activeId} onActiveChange={setActiveId}>
-        <AppShell
-          layout="primary-sidebar"
-          sidebar={<AppSidebar />}
-          header={
-            <PageHeader
-              title={current.label}
-              rightSlot={<Button variant="primary" size="md" onClick={() => setBulkUpdateOpen(true)}>批次更新</Button>}
-            />
-          }
-        >
-          <DashboardPage />
+        <AppShell layout="primary-sidebar" sidebar={<AppSidebar />} header={<PageHeader title={current.label} rightSlot={rightSlot} />}>
+          {activeId === 'dashboard' && <DashboardPage />}
+          {activeId === 'orders' && (
+            <OrdersPage orders={orders} onCreateOrder={handleCreateOrder} onStatusChange={handleStatusChange} onDeleteOrders={handleDeleteOrders} />
+          )}
+          {activeId !== 'dashboard' && activeId !== 'orders' && (
+            <div className="px-[var(--layout-space-loose)] py-[var(--layout-space-tight)]">
+              <p className="text-body text-fg-secondary">此頁面尚未實作。</p>
+            </div>
+          )}
           <BulkUpdateDialog open={bulkUpdateOpen} onOpenChange={setBulkUpdateOpen} />
         </AppShell>
       </SidebarProvider>
+      <Toaster />
     </TooltipProvider>
   )
 }
