@@ -41,7 +41,7 @@ import {
   Settings,
 } from 'lucide-react'
 
-// ── Nav ────────────────────────────────────────────────────────────────────────────
+// ── Nav ──────────────────────────────────────────────────────────────────────
 
 const NAV = [
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
@@ -94,7 +94,7 @@ function AppSidebar() {
   )
 }
 
-// ── Status Tag ──────────────────────────────────────────────────────────────────
+// ── Status Tag ────────────────────────────────────────────────────────────────
 
 function StatusTag({ status }: { status: 'pending' | 'approved' | 'current' | 'rejected' }) {
   const map = {
@@ -107,7 +107,7 @@ function StatusTag({ status }: { status: 'pending' | 'approved' | 'current' | 'r
   return <Tag color={color} size="sm">{label}</Tag>
 }
 
-// ── Line item type + columns ────────────────────────────────────────────────────────
+// ── Line item type + columns ──────────────────────────────────────────────────
 
 interface LineItem {
   no: string
@@ -170,16 +170,16 @@ const LINE_COLUMNS = [
 ]
 
 const LINE_ITEMS: LineItem[] = [
-  { no: '0010', desc: 'CNC Machining Center, 5-Axis',      sub: 'Haas UMC-1000',           req: 'James Liu',  qty: 2,   uom: 'EA',  unitPrice: 68500, amount: 137000, cc: 'CC-3100' },
-  { no: '0020', desc: 'Industrial Robot Arm, 6-DOF',       sub: 'FANUC M-20iD/12',          req: 'James Liu',  qty: 1,   uom: 'EA',  unitPrice: 45000, amount:  45000, cc: 'CC-3100' },
-  { no: '0030', desc: 'Servo Drive & Controller Set',      sub: 'Siemens SINAMICS S120',    req: 'Amy Chen',   qty: 4,   uom: 'SET', unitPrice:  8200, amount:  32800, cc: 'CC-3200' },
-  { no: '0040', desc: 'Coolant Filtration Unit',           sub: 'Mayfran CF-600',           req: 'Tom Hsu',    qty: 2,   uom: 'EA',  unitPrice:  9250, amount:  18500, cc: 'CC-4010' },
-  { no: '0050', desc: 'Cutting Tool Set, Carbide End Mill', sub: 'Sandvik Coromant R390',   req: 'James Liu',  qty: 200, uom: 'PCS', unitPrice:   125, amount:  25000, cc: 'CC-3100' },
-  { no: '0060', desc: 'Safety Enclosure & Light Curtain',  sub: 'SICK deTec4',              req: 'Amy Chen',   qty: 3,   uom: 'SET', unitPrice:  2650, amount:   7950, cc: 'CC-4010' },
-  { no: '0070', desc: 'Installation & Commissioning',      sub: 'On-site 10-day support',   req: 'Linda Wang', qty: 1,   uom: 'LS',  unitPrice: 18500, amount:  18500, cc: 'CC-3100' },
+  { no: '0010', desc: 'CNC Machining Center, 5-Axis',     sub: 'Haas UMC-1000',           req: 'James Liu',  qty: 2,   uom: 'EA',  unitPrice: 68500,  amount: 137000, cc: 'CC-3100' },
+  { no: '0020', desc: 'Industrial Robot Arm, 6-DOF',      sub: 'FANUC M-20iD/12',          req: 'James Liu',  qty: 1,   uom: 'EA',  unitPrice: 45000,  amount:  45000, cc: 'CC-3100' },
+  { no: '0030', desc: 'Servo Drive & Controller Set',     sub: 'Siemens SINAMICS S120',    req: 'Amy Chen',   qty: 4,   uom: 'SET', unitPrice:  8200,  amount:  32800, cc: 'CC-3200' },
+  { no: '0040', desc: 'Coolant Filtration Unit',          sub: 'Mayfran CF-600',           req: 'Tom Hsu',    qty: 2,   uom: 'EA',  unitPrice:  9250,  amount:  18500, cc: 'CC-4010' },
+  { no: '0050', desc: 'Cutting Tool Set, Carbide End Mill',sub: 'Sandvik Coromant R390',   req: 'James Liu',  qty: 200, uom: 'PCS', unitPrice:   125,  amount:  25000, cc: 'CC-3100' },
+  { no: '0060', desc: 'Safety Enclosure & Light Curtain', sub: 'SICK deTec4',              req: 'Amy Chen',   qty: 3,   uom: 'SET', unitPrice:  2650,  amount:   7950, cc: 'CC-4010' },
+  { no: '0070', desc: 'Installation & Commissioning',     sub: 'On-site 10-day support',   req: 'Linda Wang', qty: 1,   uom: 'LS',  unitPrice: 18500,  amount:  18500, cc: 'CC-3100' },
 ]
 
-// ── PR Preview Page ───────────────────────────────────────────────────────────────
+// ── PR Preview Page ───────────────────────────────────────────────────────────
 
 const STATIONS = [
   { value: 's1', label: 'Dept. Head',         name: 'Michael Zhao',    role: 'Head of Mfg. Engineering',        status: 'approved' as const, date: '2026-07-14 09:22' },
@@ -391,7 +391,7 @@ function PRPreviewPage() {
   )
 }
 
-// ── Story ─────────────────────────────────────────────────────────────────────────────
+// ── Story ─────────────────────────────────────────────────────────────────────
 
 const meta: Meta = {
   title: 'Apps/template/PR Preview',
